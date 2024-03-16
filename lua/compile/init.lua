@@ -7,44 +7,82 @@ end
 
 local M = {}
 
-local job = require("plenary.job")
-local utils = require("compile.util")
+local Job = require("plenary.job")
+local utils = require("compile.utils")
+local fs = require("compile.fs")
 
 M.command_exe = ""
 M.command_args = {}
-M.bufnr = 6
+M.bufnr = 9
 
-function M:run_compile_command()
+local raw_input = ""
+local start_text = {}
+local end_text = {}
+
+local function on_std(_, data)
+	vim.schedule(function()
+		utils:write_line(M.bufnr, data)
+	end)
+end
+
+local function print_start_boilerplate()
+	local tbl = {
+		"Compilation start at " .. utils:get_time(),
+		"",
+		raw_input,
+		"",
+	}
+	start_text = tbl
+
+	for _, value in ipairs(tbl) do
+		utils:write_line(M.bufnr, value)
+	end
+end
+
+local function print_end_boilerplate()
+	local tbl = {
+		"",
+		"Compilation finished at " .. utils:get_time(),
+	}
+	end_text = tbl
+
+	for _, value in ipairs(tbl) do
+		utils:write_line(M.bufnr, value)
+	end
+end
+
+local function run_compile_command()
 	if M.command_exe == "" then
 		print("No compile command set")
 		return
 	end
 
-	vim.api.nvim_buf_set_lines(M.bufnr, 0, -1, false, { "" })
+	utils:reset_buf(M.bufnr)
+	vim.schedule(print_start_boilerplate)
 
-	local idx = 0
-
-	job:new({
+	local job = Job:new({
 		command = M.command_exe,
 		cwd = M.command_cwd,
 		args = M.command_args,
-		on_stdout = function(_, data)
+		on_stdout = on_std,
+		on_stderr = on_std,
+		on_exit = function(j)
 			vim.schedule(function()
-				vim.api.nvim_buf_set_lines(M.bufnr, idx, idx, false, { data })
+				print_end_boilerplate()
+				print(vim.inspect(start_text))
+				fs:save_compile_output(start_text, j:result(), end_text)
 			end)
-			idx = idx + 1
 		end,
-	}):sync()
+	})
+
+	job:start()
 end
 
-function M:ask_for_input()
-	local foo = M.command_exe .. " " .. vim.fn.join(M.command_args, " ")
-	local input = vim.fn.input("Compile command:", foo)
-	M.command_exe, M.command_args = utils:split_command(input)
+function M:compile()
+	raw_input = vim.fn.input("Compile command: ", raw_input)
+	M.command_exe, M.command_args = utils:split_command(raw_input)
 	M.command_cwd = vim.fn.fnamemodify(vim.fn.expand("%:p"), ":h")
-	M.run_compile_command()
+	run_compile_command()
 end
-
-vim.keymap.set("n", "<leader>co", M.ask_for_input)
 
 return M
